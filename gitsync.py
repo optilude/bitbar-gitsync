@@ -20,12 +20,6 @@ class ConfigError(Exception):
     def __init__(self, message):
         self.message = message
 
-class GitError(Exception):
-
-    def __init__(self, repo, message):
-        self.repo = repo
-        self.message = message
-
 class LocalRepo(object):
 
     def __init__(self, repo, name, pull_from, push_to):
