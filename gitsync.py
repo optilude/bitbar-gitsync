@@ -5,7 +5,7 @@
 # <bitbar.version>v0.1</bitbar.version>
 # <bitbar.author>Martin Aspeli</bitbar.author>
 # <bitbar.author.github>optilude</bitbar.author.github>
-# <bitbar.image></bitbar.image>
+# <bitbar.image>https://raw.githubusercontent.com/optilude/bitbar-gitsync/master/screenshot.png</bitbar.image>
 # <bitbar.desc>Sync git repositories</bitbar.desc>
 # <bitbar.dependencies>python, GitPython</bitbar.dependencies>
 
