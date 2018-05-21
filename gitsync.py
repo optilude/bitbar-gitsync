@@ -220,8 +220,10 @@ def print_menu(error, statuses):
         return
 
     if any([True for s in statuses if (
-        (s.pull is not None and s.pull is not True) or
-        (s.push is not None and s.push is not True)
+        isinstance(s.pull, str) or
+        isinstance(s.stage, str) or
+        isinstance(s.commit, str) or
+        isinstance(s.push, str)
     )]):
         print('❗')
     else:
@@ -233,10 +235,10 @@ def print_menu(error, statuses):
 
         print("%s %s %s%s" % (
             '❗' if any((
-                status.pull is not True,
-                status.stage is not True,
-                status.commit is not True,
-                status.push is not True,
+                isinstance(status.pull, str),
+                isinstance(status.stage, str),
+                isinstance(status.commit, str),
+                isinstance(status.push, str),
             )) else '✔',
             status.local_repo.name,
             '✳' if status.dirty else '',
