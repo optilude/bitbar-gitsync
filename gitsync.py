@@ -9,120 +9,204 @@
 # <bitbar.desc>Sync git repositories</bitbar.desc>
 # <bitbar.dependencies>python, GitPython</bitbar.dependencies>
 
+import socket
 import os.path
 import configparser
 import git
 
 CONFIG_FILE=os.path.expanduser('~/.bitbar-gitsync')
 
+class PullOptions:
+    all = 'all'
+    none = 'none'
+
+class StageOptions:
+    all = 'all'
+    tracked = 'tracked'
+    none = 'none'
+
+class PushOptions:
+    all = 'all'
+    committed = 'committed'
+    none = 'none'
+
 class ConfigError(Exception):
     
     def __init__(self, message):
         self.message = message
 
-class LocalRepo(object):
-
-    def __init__(self, repo, name, pull_from, push_to):
-        self.repo = repo
-        self.name = name
-
-        self.pull_from = pull_from
-        self.push_to = push_to
-
-    @property
-    def pull_from(self):
-        return self._pull_from
-
-    @pull_from.setter
-    def pull_from(self, value):
-        if value is not None and value not in [r.name for r in self.repo.remotes]:
-            raise ConfigError("Remote %s does not exist for repository %s" % (value, self.name))
-        self._pull_from = value
-    
-    @property
-    def push_to(self):
-        return self._push_to
-
-    @push_to.setter
-    def push_to(self, value):
-        if value is not None and value not in [r.name for r in self.repo.remotes]:
-            raise ConfigError("Remote %s does not exist for repository %s" % (value, self.name,))
-        self._push_to = value
-
-    @staticmethod
-    def from_path(path, pull_from=None, push_to=None, context=''):
-        if not os.path.isdir(path):
-            raise ConfigError("Path %s in %s is not a directory" % (path, context,))
-        
-        try:
-            repo = git.Repo(path)
-        except git.exc.NoSuchPathError:
-            raise ConfigError("Path %s in %s cannot be read" % (path, context,))
-        except git.exc.InvalidGitRepositoryError:
-            raise ConfigError("Path %s in %s does not refer to a valid git repository" % (path, context,))
-        
-        return LocalRepo(
-            repo=repo,
-            name=os.path.basename(path),
-            pull_from=pull_from,
-            push_to=push_to,
-        )
-
 class Status(object):
 
-    def __init__(self, local_repo, pull=None, push=None):
+    def __init__(self, local_repo, pull=None, stage=None, commit=None, push=None, dirty=None):
         self.local_repo = local_repo
         self.pull = pull
+        self.stage = stage
+        self.commit = commit
         self.push = push
+        self.dirty = dirty
+
+class LocalRepo(object):
+
+    def __init__(self, repo, name, remote='origin', pull=None, stage=None, push=None, command=None):
+        self.repo = repo
+        self.name = name
+        self.remote = remote
+        self.pull = pull
+        self.stage = stage
+        self.push = push
+        self.command = command
+
+    @property
+    def remote(self):
+        return self._remote
+
+    @remote.setter
+    def remote(self, value):
+        if value is not None and value not in [r.name for r in self.repo.remotes]:
+            raise ConfigError("Remote %s does not exist for repository %s" % (value, self.name))
+        self._remote = value
+    
+    @property
+    def pull(self):
+        return self._pull
+
+    @pull.setter
+    def pull(self, value):
+        if value is not None and value not in (PullOptions.all, PullOptions.none,):
+            raise ConfigError("Pull option %s is not valid for repository %s" % (value, self.name))
+        self._pull = PullOptions.none if value is None else value
+    
+    @property
+    def stage(self):
+        return self._stage
+
+    @stage.setter
+    def stage(self, value):
+        if value is not None and value not in (StageOptions.all, StageOptions.tracked, StageOptions.none,):
+            raise ConfigError("Stage option %s is not valid for repository %s" % (value, self.name))
+        self._stage = StageOptions.none if value is None else value
+        
+    @property
+    def push(self):
+        return self._push
+
+    @push.setter
+    def push(self, value):
+        if value is not None and value not in (PushOptions.all, PushOptions.committed, PushOptions.none,):
+            raise ConfigError("Push option %s is not valid for repository %s" % (value, self.name))
+        self._push = PushOptions.none if value is None else value
 
 def get_config(filename):
     if not os.path.isfile(filename):
         raise ConfigError("Configuration file %s does not exist" % filename)
 
     parser = configparser.ConfigParser()
-    parser.optionxform = str
-    
     parser.read(filename)
     
-    paths = {}
+    repos = []
 
-    if parser.has_section('pull'):
-        for path, remote in parser['pull'].items():
-            paths[path] = LocalRepo.from_path(path, pull_from=remote, context="[pull]")
+    for section in parser.sections():
+
+        name = section
+        path = parser[name].get('path', None)
+        remote = parser[name].get('remote', 'origin')
+        pull = parser[name].get('pull', None)
+        stage = parser[name].get('stage', None)
+        push = parser[name].get('push', None)
+        command = parser[name].get('command', None)
+
+        if path is None:
+            raise ConfigError("Path is required for %s" % (name,))
+ 
+        if not os.path.isdir(path):
+            raise ConfigError("Path %s for %s is not a directory" % (path, name,))
+        
+        try:
+            repo = git.Repo(path)
+        except git.exc.NoSuchPathError:
+            raise ConfigError("Path %s for %s cannot be read" % (path, name,))
+        except git.exc.InvalidGitRepositoryError:
+            raise ConfigError("Path %s for %s does not refer to a valid git repository" % (path, name,))
+        
+        repos.append(LocalRepo(
+            repo=repo,
+            name=name,
+            remote=remote,
+            pull=pull,
+            stage=stage,
+            push=push,
+            command=command
+        ))
     
-    if parser.has_section('push'):
-        for path, remote in parser['push'].items():
-            if path not in paths:
-                paths[path] = LocalRepo.from_path(path, push_to=remote, context="[push]")
-            else:
-                paths[path].push_to = remote
 
-    return paths.values()
+    return repos
+
+def sync_one(local_repo):
+    status = Status(local_repo)
+    remote = local_repo.remote
+    repo = local_repo.repo
+
+    # Pull if `pull = all`
+    if local_repo.pull == PullOptions.all:
+        try:
+            repo.remotes[remote].pull()
+        except git.exc.GitCommandError as e:
+            status.pull = e.stderr
+            return status
+        else:
+            status.pull = True
+    
+    # Stage all tracked files if `stage = tracked`
+    if local_repo.stage == StageOptions.tracked:
+        try:
+            repo.git.add(update=True)
+        except git.exc.GitCommandError as e:
+            status.stage = e.stderr
+            return status
+        else:
+            status.stage = True
+    
+    # Stage all local files if `stage = all`
+    if local_repo.stage == StageOptions.all:
+        try:
+            repo.git.add(all=True)
+        except git.exc.GitCommandError as e:
+            status.stage = e.stderr
+            return status
+        else:
+            status.stage = True
+
+    # Commit changes if `push = all` if we have any staged changes to commit
+    if local_repo.push == PushOptions.all and len(repo.index.diff(None)) > 0:
+        try:
+            repo.index.commit("Automatically synced from %s" % socket.gethostname())
+        except git.exc.GitCommandError as e:
+            status.commit = e.stderr
+            return status
+        else:
+            status.commit = True
+
+    # Push changes if `push = all` or `push = committed`
+    if local_repo.push in (PushOptions.all, PushOptions.committed,):
+        try:
+            repo.remotes[remote].push()
+        except git.exc.GitCommandError as e:
+            status.push = e.stderr
+            return status
+        else:
+            status.push = True
+    
+    # Check for diff
+    status.dirty = len(repo.index.diff(None)) > 0 or len(repo.untracked_files) > 0
+
+    return status
 
 def sync(local_repos):
 
     statuses = []
 
     for local_repo in local_repos:
-        status = Status(local_repo)
-        if local_repo.pull_from is not None:
-            
-            try:
-                fetch_infos = local_repo.repo.remotes[local_repo.pull_from].pull()
-            except git.exc.GitCommandError as e:
-                status.pull = e.stderr
-            else:
-                status.pull = True
-            
-        if local_repo.push_to is not None:
-            if status.pull is True or status.pull is None:
-                try:
-                    push_infos = local_repo.repo.remotes[local_repo.push_to].push()
-                except git.exc.GitCommandError as e:
-                    status.push = e.stderr
-                else:
-                    status.push = True
-        
+        status = sync_one(local_repo)
         statuses.append(status)
     
     return statuses
@@ -146,23 +230,34 @@ def print_menu(error, statuses):
     print('---')
     
     for status in statuses:
-        print("%s: %s%s" % (
+
+        print("%s %s %s%s" % (
+            '❗' if any((
+                status.pull is not True,
+                status.stage is not True,
+                status.commit is not True,
+                status.push is not True,
+            )) else '✔',
             status.local_repo.name,
-            '–' if status.pull is None else '⬇' if status.pull is True else '❗',
-            '–' if status.push is None else '⬆' if status.push is True else '❗',
+            '✳' if status.dirty else '',
+            (' | bash=%s' % status.local_repo.command.replace('\\', '\\\\')) if status.local_repo.command else '',
         ))
 
-        if status.pull is not None and status.pull is not True:
-            print('--%s' % status.pull.replace('\n', '\n--'))
-        if status.push is not None and status.push is not True:
-            print('--%s' % status.push.replace('\n', '\n--'))
+        if isinstance(status.pull, str):
+            print('--%s' % status.pull.strip().replace('\n', '\n--'))
+        if isinstance(status.stage, str):
+            print('--%s' % status.stage.strip().replace('\n', '\n--'))
+        if isinstance(status.commit, str):
+            print('--%s' % status.commit.strip().replace('\n', '\n--'))
+        if isinstance(status.push, str):
+            print('--%s' % status.push.strip().replace('\n', '\n--'))
 
 try:
 
     local_repos = get_config(CONFIG_FILE)
 
     if len(local_repos) == 0:
-        print_menu("No repositories listed to sync found in %s" % CONFIG_FILE, [])
+        print_menu("No repositories to sync found in %s" % CONFIG_FILE, [])
 
     else:
         statuses = sync(local_repos)
