@@ -177,7 +177,7 @@ def sync_one(local_repo):
             status.stage = True
 
     # Commit changes if `push = all` if we have any staged changes to commit
-    if local_repo.push == PushOptions.all and len(repo.index.diff(None)) > 0:
+    if local_repo.push == PushOptions.all and len(repo.index.diff(repo.head.commit)) > 0:
         try:
             repo.index.commit("Automatically synced from %s" % socket.gethostname())
         except git.exc.GitCommandError as e:
